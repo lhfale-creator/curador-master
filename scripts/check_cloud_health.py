@@ -2,25 +2,13 @@
 """Curador - cloud durability checker.
 
 Ensures the knowledge base is actually in the cloud and nothing important
-lives only locally. Core rule: EVERYTHING in the vault (OneDrive/iCloud/Dropbox),
-nothing outside.
+lives only locally. Core rule: EVERYTHING in the vault (cloud-synced), nothing outside.
 
-Checks:
-  1. Is the vault under the synced cloud root? (path + environment variable)
-  2. Is the cloud sync process running? (Windows) -> if not, nothing is uploading.
-  3. Knowledge files stranded outside the vault (tmp, Desktop, Downloads,
-     Documents root) that should have a master copy in the vault.
-     (.md/.pdf/.docx/.pptx)
-  4. Parallel vault in iCloud (divergent source) - divergence alert.
-  5. Online-only notes (dehydrated placeholder): ARE in the cloud (durability ok),
-     informative only - they download on open.
-  6. Recency of the last local backup (tmp/curador-backup-*).
-
-Deterministic, zero external dependencies. Works on Windows (NTFS attrs via ctypes)
-and macOS (iCloud/OneDrive paths). Output: report + durability verdict.
+Supports: OneDrive, Dropbox, Google Drive (Windows + macOS).
 
 Usage:
     python check_cloud_health.py --vault "<vault folder>" [--extra-dir "<dir>"] [--json]
+    python check_cloud_health.py --config curador.json
 """
 import argparse
 import datetime
@@ -30,22 +18,32 @@ import re
 import subprocess
 import sys
 
-# NTFS attributes relevant for OneDrive Files On-Demand (Windows)
 FILE_ATTRIBUTE_OFFLINE = 0x00001000
-FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000          # placeholder (online-only)
-FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000   # dehydrated (cloud only)
-FILE_ATTRIBUTE_PINNED = 0x00080000                  # "always keep on this device"
-FILE_ATTRIBUTE_UNPINNED = 0x00100000                # eligible for "free up space"
+FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
+FILE_ATTRIBUTE_PINNED = 0x00080000
+FILE_ATTRIBUTE_UNPINNED = 0x00100000
 INVALID = 0xFFFFFFFF
 
-# knowledge deliverables (not transient data: .csv/.xlsx are dumps, ignored)
 KNOWLEDGE_EXT = re.compile(r"\.(md|pdf|docx?|pptx?)$", re.I)
-# scratch/disposable folders where permanent knowledge should NOT be born
-SCRATCH_HINTS = ["tmp", "temp", "desktop", "downloads", "documents", "documentos"]
+PROJECT_MARKERS = {".git", "package.json", "SKILL.md", "requirements.txt",
+                   "pyproject.toml", "node_modules", "Cargo.toml", "go.mod", ".venv"}
+
+
+def load_config(config_path=None):
+    if not config_path:
+        for d in [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]:
+            c = os.path.join(d, "curador.json")
+            if os.path.exists(c):
+                config_path = c
+                break
+    if not config_path or not os.path.exists(config_path):
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def win_attrs(path):
-    """NTFS attributes via ctypes (Windows). None outside Windows or on error."""
     if os.name != "nt":
         return None
     try:
@@ -68,21 +66,67 @@ def is_online_only(attrs):
                          | FILE_ATTRIBUTE_OFFLINE))
 
 
-def onedrive_roots():
-    """Synced roots known by the OS (environment variables)."""
+def cloud_roots():
+    """All known cloud sync roots: OneDrive, Dropbox, Google Drive (Windows + macOS)."""
     roots = []
+    home = os.path.expanduser("~")
+
+    # ---- OneDrive ----
     for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
         v = os.environ.get(var)
         if v and os.path.isdir(v):
-            roots.append(os.path.normcase(os.path.abspath(v)))
-    # macOS: typical CloudStorage path
-    home = os.path.expanduser("~")
-    mac_od = os.path.join(home, "Library", "CloudStorage")
-    if os.path.isdir(mac_od):
-        for d in os.listdir(mac_od):
+            roots.append(v)
+    mac_cs = os.path.join(home, "Library", "CloudStorage")
+    if os.path.isdir(mac_cs):
+        for d in os.listdir(mac_cs):
             if d.lower().startswith("onedrive"):
-                roots.append(os.path.normcase(os.path.join(mac_od, d)))
-    return sorted(set(roots))
+                roots.append(os.path.join(mac_cs, d))
+
+    # ---- Dropbox ----
+    for candidate in [
+        os.environ.get("DROPBOX", ""),
+        os.path.join(home, "Dropbox"),
+        os.path.join(home, "Dropbox (Personal)"),
+        os.path.join(home, "Dropbox (Business)"),
+    ]:
+        if candidate and os.path.isdir(candidate):
+            roots.append(candidate)
+    # Dropbox info file (cross-platform)
+    for info_path in [
+        os.path.join(os.environ.get("APPDATA", ""), "Dropbox", "info.json"),
+        os.path.join(home, ".dropbox", "info.json"),
+        os.path.join(home, "Library", "Preferences", "Dropbox", "info.json"),
+    ]:
+        if os.path.exists(info_path):
+            try:
+                with open(info_path, "r", encoding="utf-8") as f:
+                    info = json.load(f)
+                for acct in info.values():
+                    p = acct.get("path", "")
+                    if p and os.path.isdir(p):
+                        roots.append(p)
+            except Exception:
+                pass
+
+    # ---- Google Drive ----
+    for candidate in [
+        os.path.join(home, "Google Drive"),
+        os.path.join(home, "GoogleDrive"),
+        os.path.join(home, "My Drive"),
+    ]:
+        if os.path.isdir(candidate):
+            roots.append(candidate)
+    if os.path.isdir(mac_cs):
+        for d in os.listdir(mac_cs):
+            if "google" in d.lower() or "mydrive" in d.lower():
+                roots.append(os.path.join(mac_cs, d))
+    # Google Drive for Desktop (Windows)
+    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        gdrive = f"{letter}:\\My Drive"
+        if os.path.isdir(gdrive):
+            roots.append(gdrive)
+
+    return sorted({os.path.normcase(os.path.abspath(r)) for r in roots if r})
 
 
 def under(path, roots):
@@ -90,43 +134,41 @@ def under(path, roots):
     return any(p == r or p.startswith(r + os.sep) for r in roots)
 
 
-def onedrive_running():
-    """True/False/None(unknown). Only tries on Windows."""
+def sync_running():
+    """Check if any sync client is running (Windows only). Returns list of running clients."""
     if os.name != "nt":
         return None
+    running = []
+    clients = {
+        "OneDrive.exe": "OneDrive",
+        "Dropbox.exe": "Dropbox",
+        "googledrivesync.exe": "Google Drive (old)",
+        "GoogleDriveFS.exe": "Google Drive",
+    }
     try:
-        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq OneDrive.exe"],
-                             capture_output=True, text=True, timeout=15)
-        return "OneDrive.exe" in out.stdout
+        out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=15)
+        for exe, name in clients.items():
+            if exe.lower() in out.stdout.lower():
+                running.append(name)
     except Exception:
         return None
+    return running
 
 
 def icloud_vault_candidates():
-    """Look for a parallel vault in iCloud (divergent source)."""
     home = os.path.expanduser("~")
     cands = []
-    guesses = [
+    for g in [
         os.path.join(home, "Library", "Mobile Documents", "iCloud~md~obsidian"),
         os.path.join(home, "iCloudDrive"),
         os.path.join(home, "Library", "Mobile Documents", "com~apple~CloudDocs"),
-    ]
-    for g in guesses:
+    ]:
         if os.path.isdir(g):
             cands.append(g)
     return cands
 
 
-# markers that a folder is a code project/tool, NOT loose knowledge
-PROJECT_MARKERS = {".git", "package.json", "SKILL.md", "requirements.txt",
-                   "pyproject.toml", "node_modules", "Cargo.toml", "go.mod", ".venv"}
-
-
 def scan_loose(vault_root, extra_dirs):
-    """Find knowledge files (deliverables/notes) stranded in scratch folders
-    that should have a master copy in the vault. Stays shallow and SKIPS
-    folders that are code projects (cloned repos, skills, etc.) — they live
-    in a repo, not as loose knowledge."""
     vault_nc = os.path.normcase(os.path.abspath(vault_root))
     home = os.path.expanduser("~")
     roots = [
@@ -140,22 +182,18 @@ def scan_loose(vault_root, extra_dirs):
         for fn in fns:
             if KNOWLEDGE_EXT.search(fn):
                 vault_basenames.add(fn.lower())
-    loose = []
-    seen = set()
+    loose, seen = [], set()
     for r in roots:
         if not os.path.isdir(r):
             continue
         for dp, dn, fns in os.walk(r):
             if os.path.normcase(os.path.abspath(dp)).startswith(vault_nc):
-                dn[:] = []
-                continue
+                dn[:] = []; continue
             if PROJECT_MARKERS & set(fns + dn):
-                dn[:] = []
-                continue
+                dn[:] = []; continue
             dn[:] = [d for d in dn if not d.startswith(".")
                      and d not in ("node_modules", "__pycache__", "AppData", "Library")]
-            depth = os.path.relpath(dp, r).count(os.sep)
-            if depth >= 1:
+            if os.path.relpath(dp, r).count(os.sep) >= 1:
                 dn[:] = []
             for fn in fns:
                 if not KNOWLEDGE_EXT.search(fn):
@@ -185,71 +223,82 @@ def last_backup():
                     newest = (full, m)
     if not newest:
         return None
-    return {"path": newest[0],
-            "date": datetime.date.fromtimestamp(newest[1]).isoformat()}
+    return {"path": newest[0], "date": datetime.date.fromtimestamp(newest[1]).isoformat()}
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--vault", required=True, help="Obsidian vault root folder")
-    ap.add_argument("--extra-dir", action="append", default=[],
-                    help="extra scratch folder to scan for loose files")
+    ap.add_argument("--vault", default=None)
+    ap.add_argument("--config", default=None)
+    ap.add_argument("--extra-dir", action="append", default=[])
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+
+    cfg = load_config(args.config)
+    if not args.vault and cfg.get("vault"):
+        args.vault = os.path.expanduser(cfg["vault"])
+    extra_dirs = args.extra_dir + [os.path.expanduser(d) for d in (cfg.get("extra_dirs") or [])]
+
+    if not args.vault:
+        print("ERROR: --vault required (or set 'vault' in curador.json)", file=sys.stderr)
+        sys.exit(2)
 
     vault = os.path.abspath(args.vault)
     if not os.path.isdir(vault):
         print(f"ERROR: vault not found: {vault}", file=sys.stderr)
         sys.exit(2)
 
-    roots = onedrive_roots()
+    roots = cloud_roots()
     in_cloud = under(vault, roots)
-    running = onedrive_running()
+    running = sync_running()
     icloud = icloud_vault_candidates()
-    loose = scan_loose(vault, args.extra_dir)
+    loose = scan_loose(vault, extra_dirs)
     bk = last_backup()
 
-    online_only = []
-    total_md = 0
+    online_only, total_md = [], 0
     for dp, dn, fns in os.walk(vault):
         dn[:] = [d for d in dn if d not in (".git", ".obsidian", ".trash", "node_modules")]
         for fn in fns:
             if fn.lower().endswith(".md"):
                 total_md += 1
-                a = win_attrs(os.path.join(dp, fn))
-                if is_online_only(a):
+                if is_online_only(win_attrs(os.path.join(dp, fn))):
                     online_only.append(os.path.relpath(os.path.join(dp, fn), vault))
 
     risks = []
     if not in_cloud:
-        risks.append("CRITICAL: vault is NOT under the synced OneDrive root - "
-                     "changes may not upload to the cloud.")
-    if running is False:
-        risks.append("ALERT: OneDrive process is not running - nothing is syncing right now.")
+        risks.append("CRITICAL: vault is NOT under any cloud sync root (OneDrive/Dropbox/Google Drive).")
+    if running is not None and not running:
+        risks.append("ALERT: no sync client running — nothing is uploading right now.")
     not_mirrored = [x for x in loose if not x["mirrored_in_vault"]]
     if not_mirrored:
-        risks.append(f"WARNING: {len(not_mirrored)} knowledge file(s) outside the vault "
-                     "with no copy in vault (rule: nothing outside).")
-    if len(icloud) > 0:
-        risks.append(f"NOTE: {len(icloud)} possible parallel vault(s) in iCloud - "
-                     "confirm single source of truth is OneDrive.")
+        risks.append(f"WARNING: {len(not_mirrored)} knowledge file(s) outside the vault with no copy in vault.")
+    if icloud:
+        risks.append(f"NOTE: {len(icloud)} possible parallel vault(s) in iCloud — confirm single source of truth.")
     if bk is None:
         risks.append("NOTE: no local curador-backup-* found.")
 
     print("=" * 60)
-    print("CURADOR - CLOUD DURABILITY CHECK")
+    print("CURADOR — CLOUD DURABILITY CHECK")
     print(f"vault: {vault}")
     print("=" * 60)
-    print(f"\nOneDrive roots detected: {roots or '(none via env vars)'}")
-    print(f"Vault under synced OneDrive: {'YES' if in_cloud else 'NO'}")
-    running_txt = "YES" if running else ("NO" if running is False else "(unknown)")
-    print(f"OneDrive process running: {running_txt}")
-    print(f"Notes (.md) in vault: {total_md}  |  online-only (cloud only right now): {len(online_only)}")
+    print(f"\nCloud roots detected ({len(roots)}):")
+    for r in roots:
+        print(f"  {r}")
+    if not roots:
+        print("  (none — OneDrive/Dropbox/Google Drive not detected)")
+    print(f"Vault under cloud root: {'YES' if in_cloud else 'NO'}")
+    if running is None:
+        print("Sync client running: (unknown — non-Windows)")
+    elif running:
+        print(f"Sync client running: YES ({', '.join(running)})")
+    else:
+        print("Sync client running: NO")
+    print(f"Notes (.md) in vault: {total_md}  |  online-only: {len(online_only)}")
     print(f"Last local backup: {bk['date'] + '  ' + bk['path'] if bk else '(none)'}")
 
-    print(f"\n## KNOWLEDGE FILES OUTSIDE THE VAULT ({len(loose)})")
+    print(f"\n## KNOWLEDGE FILES OUTSIDE VAULT ({len(loose)})")
     if not loose:
-        print("  ok - nothing loose found in scratch folders")
+        print("  ok — nothing loose found")
     for x in loose:
         flag = "" if x["mirrored_in_vault"] else "  <-- NO copy in vault"
         print(f"  - {x['path']}{flag}")
@@ -260,7 +309,7 @@ def main():
             print(f"  - {c}")
 
     if online_only:
-        print(f"\n## ONLINE-ONLY NOTES (in cloud, download on open) ({len(online_only)})")
+        print(f"\n## ONLINE-ONLY NOTES ({len(online_only)}) — in cloud, download on open")
         for r in online_only[:30]:
             print(f"  - {r}")
         if len(online_only) > 30:
@@ -269,7 +318,7 @@ def main():
     print("\n" + "=" * 60)
     print("DURABILITY VERDICT")
     if not risks:
-        print("  OK - base in cloud, syncing, no loose knowledge files.")
+        print("  OK — vault in cloud, sync running, no loose files.")
     else:
         for r in risks:
             print(f"  - {r}")
@@ -278,10 +327,9 @@ def main():
     if args.json:
         print("<<<JSON>>>")
         print(json.dumps({
-            "vault": vault, "onedrive_roots": roots, "vault_under_onedrive": in_cloud,
-            "onedrive_running": running, "total_md": total_md,
-            "online_only": online_only, "loose_files": loose,
-            "icloud_candidates": icloud, "last_backup": bk, "risks": risks,
+            "vault": vault, "cloud_roots": roots, "vault_under_cloud": in_cloud,
+            "sync_running": running, "total_md": total_md, "online_only": online_only,
+            "loose_files": loose, "icloud_candidates": icloud, "last_backup": bk, "risks": risks,
         }, ensure_ascii=False, indent=2))
 
 

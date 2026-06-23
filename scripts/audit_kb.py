@@ -2,26 +2,18 @@
 """Curador - knowledge base audit engine.
 
 Scans a folder of .md notes (Claude memory OR Obsidian vault) and detects
-what causes "loose memory": orphans, duplicates, broken links, separator
+what causes loose memory: orphans, duplicates, broken links, separator
 mismatch, inconsistent frontmatter, name diverging from filename, and
 cross-system references (vault <-> memory).
 
-Deterministic, zero external dependencies (no PyYAML needed).
-Cross-platform: runs on Windows and macOS with the same command.
+Deterministic, zero external dependencies. Cross-platform (Windows/macOS/Linux).
 
 Usage:
-    python audit_kb.py --path "<folder>" [--index MEMORY.md] [--profile memory|vault|auto] [--json] [--snapshot <file.jsonl>]
+    python audit_kb.py --path "<folder>" [--profile memory|vault|auto]
+                       [--snapshot <file.jsonl>] [--summary] [--json]
 
-Output: human-readable report on stdout. With --json, also prints a
-machine-readable JSON block after the <<<JSON>>> marker.
-
-Design notes (why each heuristic exists):
-- Wikilinks inside `backtick` or ``` blocks are EXAMPLE TEXT, not links.
-- Markdown links `(file.md)` (used in the index) are canonical and never
-  counted as "separator mismatch".
-- A wikilink target with '/', space or uppercase is NOT a memory slug; it is
-  a reference to the Obsidian vault (other system). Reported separately, never
-  flagged as broken.
+    # With config file (paths stored in curador.json):
+    python audit_kb.py --config curador.json [--summary]
 """
 import argparse
 import json
@@ -37,14 +29,26 @@ INLINE_CODE_RE = re.compile(r"`[^`]*`")
 ASSET_RE = re.compile(r"\.(png|jpe?g|svg|gif|webp|bmp|pdf|mp4|mov|webm|mp3|wav|zip|xlsx?|docx?|pptx?|csv)$", re.I)
 MEMORY_SLUG_RE = re.compile(r"^(project|feedback|reference|reminder|user)[_-]", re.I)
 
-# stop-words (PT + slug type prefixes) for content similarity comparison
 STOPWORDS = set("""a o os as de da do das dos e em no na nos nas um uma para por com que
 do da pra pro como sao e ou ser ja nao sem ate uns umas the of and to in for project
 feedback reference reminder user memoria projeto referencia""".split())
 
 
+def load_config(config_path=None):
+    """Load curador.json. Auto-detects in script dir or cwd when path is omitted."""
+    if not config_path:
+        for d in [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]:
+            c = os.path.join(d, "curador.json")
+            if os.path.exists(c):
+                config_path = c
+                break
+    if not config_path or not os.path.exists(config_path):
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def tokenize(s):
-    """Set of significant tokens (>=4 chars, no stopwords)."""
     if not s:
         return set()
     words = re.findall(r"\w{4,}", s.lower(), re.UNICODE)
@@ -58,14 +62,12 @@ def jaccard(a, b):
 
 
 def strip_code(text):
-    """Remove ``` blocks and `inline code` to avoid treating examples as links."""
     text = FENCE_RE.sub(" ", text)
     text = INLINE_CODE_RE.sub(" ", text)
     return text
 
 
 def norm(s):
-    """Normalize an identifier: lowercase, strip .md, collapse [-_ ] to '-'."""
     s = s.strip().lower()
     if s.endswith(".md"):
         s = s[:-3]
@@ -73,22 +75,16 @@ def norm(s):
 
 
 def link_basename(t):
-    """Clean a wikilink target: strip trailing '\\' (escaped pipe in tables)
-    and grab the last path segment (Obsidian supports [[folder/note]])."""
     t = t.strip().rstrip("\\").strip()
     return re.split(r"[\\/]", t)[-1].strip()
 
 
 def is_external(target):
-    """True if the wikilink target points to the vault (other system), not a
-    memory slug. Memory slugs are lowercase with - or _."""
     t = target.strip()
     return ("/" in t) or (" " in t) or any(c.isupper() for c in t)
 
 
 def parse_frontmatter(text):
-    """Lightweight YAML frontmatter parser. Flattens nested 'metadata:' to
-    'metadata.<key>'. Returns (fields_dict, has_frontmatter)."""
     fields = {}
     if not text.startswith("---"):
         return fields, False
@@ -144,8 +140,6 @@ def collect_notes(root):
 
 
 def build_index(notes):
-    """norm(identifier) -> path. Each note is reachable by stem, name, and
-    full relative path (to disambiguate repeated names via [[folder/note]])."""
     idx = {}
     for path, n in notes.items():
         for ident in filter(None, [n["stem"], n["name"]]):
@@ -158,20 +152,33 @@ def build_index(notes):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", required=True)
-    ap.add_argument("--index", default=None, help="index file (MEMORY.md / Home.md)")
+    ap.add_argument("--path", default=None)
+    ap.add_argument("--config", default=None, help="path to curador.json (auto-detected if omitted)")
+    ap.add_argument("--index", default=None)
     ap.add_argument("--profile", default="auto", choices=["memory", "vault", "auto"])
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--summary", action="store_true",
+                    help="print only the final summary line (no section details)")
     ap.add_argument("--snapshot", default=None,
                     help=".jsonl file: appends one metrics line per run for growth tracking")
     args = ap.parse_args()
+
+    # Config file fills missing args
+    cfg = load_config(args.config)
+    if not args.path:
+        args.path = os.path.expanduser(cfg.get("memory") or cfg.get("vault") or "")
+    if not args.snapshot and cfg.get("snapshot"):
+        args.snapshot = os.path.expanduser(cfg["snapshot"])
+
+    if not args.path:
+        print("ERROR: --path required (or set 'memory'/'vault' in curador.json)", file=sys.stderr)
+        sys.exit(2)
 
     root = os.path.abspath(args.path)
     if not os.path.isdir(root):
         print(f"ERROR: folder not found: {root}", file=sys.stderr)
         sys.exit(2)
 
-    # profile: .obsidian directory is the definitive vault signal
     profile = args.profile
     if profile == "auto":
         if os.path.isdir(os.path.join(root, ".obsidian")):
@@ -181,7 +188,6 @@ def main():
         else:
             profile = "vault"
 
-    # index: Home.md wins for vault; MEMORY.md wins for memory
     index_name = args.index
     if not index_name:
         prefer = ("Home.md", "MEMORY.md") if profile == "vault" else ("MEMORY.md", "Home.md")
@@ -195,10 +201,7 @@ def main():
     idx, full_idx = build_index(notes)
 
     incoming = {p: set() for p in notes}
-    broken = []      # (source, target)  - internal wikilink with no destination
-    near = []        # (source, target, dest) - wrong separator/case
-    external = []    # (source, target) - cross-system reference to vault
-    asset_refs = []  # (source, target) - image/pdf/zip embed (not a note)
+    broken, near, external, asset_refs = [], [], [], []
 
     for path, n in notes.items():
         for t in n["wikilinks"]:
@@ -264,9 +267,9 @@ def main():
                 fm_issues.append((n["rel"], "no frontmatter"))
                 continue
             if not fm.get("name"):
-                fm_issues.append((n["rel"], "missing name field"))
+                fm_issues.append((n["rel"], "missing name"))
             if not fm.get("description"):
-                fm_issues.append((n["rel"], "missing description field"))
+                fm_issues.append((n["rel"], "missing description"))
             if not (fm.get("metadata.type") or fm.get("type")):
                 fm_issues.append((n["rel"], "missing metadata.type"))
             if fm.get("name") and fm["name"] != n["stem"]:
@@ -274,7 +277,7 @@ def main():
         else:
             fm = n["frontmatter"]
             if not n["has_frontmatter"]:
-                vault_hygiene.append((n["rel"], "no frontmatter (tags/updated)"))
+                vault_hygiene.append((n["rel"], "no frontmatter"))
             else:
                 if not fm.get("updated"):
                     vault_hygiene.append((n["rel"], "missing updated"))
@@ -317,54 +320,49 @@ def main():
         if kb > 12:
             size_warn.append((n["rel"], f"{kb:.0f} KB (large note; consider splitting)"))
 
-    def section(title, items, render):
-        print(f"\n## {title}  ({len(items)})")
-        if not items:
-            print("  ok - nothing found")
-            return
-        for it in items:
-            print("  - " + render(it))
-
-    print("=" * 60)
-    print(f"CURADOR AUDIT  |  profile: {profile}")
-    print(f"folder: {root}")
-    print(f"index: {os.path.basename(index_path) if index_path else '(none)'}")
-    print(f"notes (.md): {len(notes)}")
-    print("=" * 60)
-
-    section("ORPHANS (no incoming links - true loose memory)", orphans, lambda x: x)
-    section("WEAKLY CONNECTED (only the index points here, no peer links)", weak, lambda x: x)
-    section("BROKEN LINKS (internal target does not exist)", broken,
-            lambda x: f"{x[0]}  ->  {x[1]}")
-    section("SEPARATOR/CASE MISMATCH (auto-fixable)", near,
-            lambda x: f"{x[0]}  ->  [[{x[1]}]]  should point to  {x[2]}")
-    section("CROSS-SYSTEM REFERENCES (memory<->vault - verify in the other system)", external,
-            lambda x: f"{x[0]}  ->  [[{x[1]}]]")
-    section("ASSET EMBEDS (image/pdf/zip - verify file exists, not a note)", asset_refs,
-            lambda x: f"{x[0]}  ->  {x[1]}")
-    section("INDEX DUPLICATES", index_dups, lambda x: f"{x[0]}  appears {x[1]}x")
-    section("NAME != FILENAME (name field vs filename separator)", name_mismatch,
-            lambda x: f"{x[0]}  (name: {x[1]})")
-    section("FRONTMATTER ISSUES", fm_issues, lambda x: f"{x[0]}  ->  {x[1]}")
-    section("INCONSISTENT FRONTMATTER KEYS (in some notes, not all)",
-            inconsistent_keys, lambda x: f"{x[0]}  in {x[1]}/{n_notes} notes")
-    section("POSSIBLE CONTENT DUPLICATES (de-bloat - human merge decision)",
-            content_dupes, lambda x: f"{x[0]}  ~  {x[1]}  (sim {x[2]})")
-    section("SUSTAINABILITY / SIZE (bloat - consider splitting or archiving)",
-            size_warn, lambda x: f"{x[0]}  ->  {x[1]}")
-    if profile == "vault":
-        section("VAULT HYGIENE (non-critical: missing tags/updated)",
-                vault_hygiene, lambda x: f"{x[0]}  ->  {x[1]}")
-
     total = (len(orphans) + len(broken) + len(near) + len(index_dups)
              + len(name_mismatch) + len(fm_issues))
-    extra = f"{len(external)} vault refs   |   " if profile == "memory" else f"{len(vault_hygiene)} hygiene   |   "
     total_links = sum(len(v) for v in incoming.values())
     density = round(total_links / n_notes, 2)
+    extra = f"{len(external)} vault refs   |   " if profile == "memory" else f"{len(vault_hygiene)} hygiene   |   "
+
+    if not args.summary:
+        def section(title, items, render):
+            print(f"\n## {title}  ({len(items)})")
+            if not items:
+                print("  ok - nothing found")
+                return
+            for it in items:
+                print("  - " + render(it))
+
+        print("=" * 60)
+        print(f"CURADOR AUDIT  |  profile: {profile}")
+        print(f"folder: {root}")
+        print(f"index: {os.path.basename(index_path) if index_path else '(none)'}")
+        print(f"notes (.md): {len(notes)}")
+        print("=" * 60)
+
+        section("ORPHANS (no incoming links)", orphans, lambda x: x)
+        section("WEAKLY CONNECTED (only index points here)", weak, lambda x: x)
+        section("BROKEN LINKS", broken, lambda x: f"{x[0]}  ->  {x[1]}")
+        section("SEPARATOR/CASE MISMATCH (auto-fixable)", near,
+                lambda x: f"{x[0]}  ->  [[{x[1]}]]  should be  {x[2]}")
+        section("CROSS-SYSTEM REFERENCES", external, lambda x: f"{x[0]}  ->  [[{x[1]}]]")
+        section("ASSET EMBEDS", asset_refs, lambda x: f"{x[0]}  ->  {x[1]}")
+        section("INDEX DUPLICATES", index_dups, lambda x: f"{x[0]}  appears {x[1]}x")
+        section("NAME != FILENAME", name_mismatch, lambda x: f"{x[0]}  (name: {x[1]})")
+        section("FRONTMATTER ISSUES", fm_issues, lambda x: f"{x[0]}  ->  {x[1]}")
+        section("INCONSISTENT KEYS", inconsistent_keys, lambda x: f"{x[0]}  in {x[1]}/{n_notes} notes")
+        section("POSSIBLE CONTENT DUPLICATES (de-bloat)",
+                content_dupes, lambda x: f"{x[0]}  ~  {x[1]}  (sim {x[2]})")
+        section("SIZE WARNINGS", size_warn, lambda x: f"{x[0]}  ->  {x[1]}")
+        if profile == "vault":
+            section("VAULT HYGIENE (non-critical)",
+                    vault_hygiene, lambda x: f"{x[0]}  ->  {x[1]}")
+
     print("\n" + "=" * 60)
-    print(f"CRITICAL FINDINGS: {total}   |   {extra}{len(weak)} weak")
-    print(f"graph health: {n_notes} notes | density {density} links/note | "
-          f"{len(content_dupes)} similar pairs")
+    print(f"CRITICAL: {total}   |   {extra}{len(weak)} weak")
+    print(f"graph: {n_notes} notes | density {density} links/note | {len(content_dupes)} similar pairs")
     print("=" * 60)
 
     if args.snapshot:
