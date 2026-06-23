@@ -38,13 +38,16 @@ python scripts/check_cloud_health.py --vault "<path/to/your/vault>"
 
 > **filename stem == `name:` field == `[[wikilink]]` == index entry — all in underscore.**
 
-Obsidian resolves links by **filename**, not by the `name:` field. A kebab wikilink won't connect in the graph. That mismatch is the #1 cause of loose memory — every detection and fix in this skill traces back to it.
+Obsidian resolves `[[X]]` by the file `X.md` (or by `aliases:`), never by the `name:` field. A kebab wikilink won't connect in the graph. That mismatch is the #1 cause of loose memory — every detection and fix in this skill traces back to it.
 
-## Installation
+## Install
 
 ```bash
-# Claude Code loads skills from ~/.claude/skills/
-unzip curador.zip -d ~/.claude/skills/
+# macOS / Linux
+git clone https://github.com/lhfale-creator/curador.git ~/.claude/skills/curador
+
+# Windows (PowerShell)
+git clone https://github.com/lhfale-creator/curador.git "$env:USERPROFILE\.claude\skills\curador"
 ```
 
 Then trigger via natural language in Claude Code:
@@ -76,7 +79,7 @@ Then trigger via natural language in Claude Code:
 | Broken wikilink | Yes | Repoint or create target |
 | Separator mismatch (`kebab` vs `underscore`) | Yes | `apply_safe_fixes.py` (auto) |
 | `name:` field ≠ filename | Yes | `--normalize-names` (auto) |
-| Index duplicate | Yes | `--no-dedup` removed / kept first |
+| Index duplicate | Yes | fixer keeps first line (auto) |
 | Frontmatter missing `tags`/`updated` | Hygiene | `--normalize-frontmatter` (auto) |
 | Content-similar notes (de-bloat) | Judgement | Merge manually |
 | Large note / bloated index | Hygiene | Split or archive |
