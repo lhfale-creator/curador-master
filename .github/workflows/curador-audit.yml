@@ -1,0 +1,71 @@
+# Curador — knowledge base audit
+# Copy this file to your vault or memory repo's .github/workflows/
+# The job fails if any critical finding (orphan, broken link, etc.) is detected.
+#
+# Customize:
+#   VAULT_PATH: path to the folder to audit (relative to repo root)
+#   PROFILE:    memory | vault | auto
+
+name: Curador audit
+
+on:
+  push:
+    paths: ['**.md']
+  pull_request:
+    paths: ['**.md']
+  schedule:
+    - cron: '0 9 * * 1'   # every Monday 09:00 UTC
+  workflow_dispatch:
+
+env:
+  VAULT_PATH: '.'
+  PROFILE: 'auto'
+
+jobs:
+  audit:
+    name: Audit knowledge base
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Clone curador skill
+        run: git clone --depth 1 https://github.com/lhfale-creator/curador.git _curador
+
+      - name: Run audit
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          python _curador/scripts/audit_kb.py \
+            --path "$VAULT_PATH" \
+            --profile "$PROFILE" \
+            --summary \
+            --json | tee audit_out.txt
+
+      - name: Fail on critical findings
+        run: |
+          python - <<'EOF'
+          import sys, json
+          raw = open('audit_out.txt').read()
+          if '<<<JSON>>>' not in raw:
+              print('No JSON block in audit output')
+              sys.exit(1)
+          data = json.loads(raw.split('<<<JSON>>>')[1])
+          n = data.get('total_critical', 0)
+          if n > 0:
+              print(f'FAIL: {n} critical finding(s). Fix before merging.')
+              sys.exit(1)
+          print(f'OK: 0 critical findings. density={data.get("graph_density")}')
+          EOF
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: curador-audit-report
+          path: audit_out.txt
+          retention-days: 30

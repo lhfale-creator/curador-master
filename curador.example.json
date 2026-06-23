@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to curador.json (gitignored) and fill in your paths",
+  "memory": "~/.claude/projects/<project-id>/memory",
+  "vault": "~/path/to/your/Obsidian/vault",
+  "snapshot": "~/path/to/your/Obsidian/vault/growth_log.jsonl",
+  "extra_dirs": []
+}
