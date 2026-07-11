@@ -12,6 +12,7 @@ Usage:
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -168,6 +169,20 @@ def icloud_vault_candidates():
     return cands
 
 
+def file_hash(path, limit=64 * 1024 * 1024):
+    """sha256 of the file, or None if unreadable / absurdly large."""
+    try:
+        if os.path.getsize(path) > limit:
+            return None
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
 def scan_loose(vault_root, extra_dirs):
     vault_nc = os.path.normcase(os.path.abspath(vault_root))
     home = os.path.expanduser("~")
@@ -176,12 +191,25 @@ def scan_loose(vault_root, extra_dirs):
         os.path.join(home, "Desktop"),
         os.path.join(home, "Downloads"),
     ] + list(extra_dirs or [])
-    vault_basenames = set()
+
+    # Index the vault by CONTENT, not by filename. Archiving a file under a better name
+    # (download.pdf -> "Planta Certificada Serrinha.pdf") is the CORRECT thing to do, and a
+    # name-only index would then report the archived file as "no copy in vault" — pushing you
+    # to delete a document that is, in fact, already safe. Name is kept as a weak fallback.
+    vault_basenames, vault_hashes = set(), {}
     for dp, dn, fns in os.walk(vault_root):
         dn[:] = [d for d in dn if d not in (".git", ".obsidian", ".trash", "node_modules")]
         for fn in fns:
-            if KNOWLEDGE_EXT.search(fn):
-                vault_basenames.add(fn.lower())
+            if not KNOWLEDGE_EXT.search(fn):
+                continue
+            vault_basenames.add(fn.lower())
+            full = os.path.join(dp, fn)
+            if is_online_only(win_attrs(full)):
+                continue  # do not force a cloud download just to hash it
+            hsh = file_hash(full)
+            if hsh:
+                vault_hashes.setdefault(hsh, os.path.relpath(full, vault_root))
+
     loose, seen = [], set()
     for r in roots:
         if not os.path.isdir(r):
@@ -205,7 +233,15 @@ def scan_loose(vault_root, extra_dirs):
                 if full in seen:
                     continue
                 seen.add(full)
-                loose.append({"path": full, "mirrored_in_vault": fn.lower() in vault_basenames})
+                hsh = file_hash(full)
+                twin = vault_hashes.get(hsh) if hsh else None
+                loose.append({
+                    "path": full,
+                    # Content match is the truth; same-name is only a hint.
+                    "mirrored_in_vault": bool(twin) or fn.lower() in vault_basenames,
+                    "vault_twin": twin,                       # where the identical copy lives
+                    "same_name_only": bool(not twin and fn.lower() in vault_basenames),
+                })
     return loose
 
 
@@ -272,6 +308,15 @@ def main():
     not_mirrored = [x for x in loose if not x["mirrored_in_vault"]]
     if not_mirrored:
         risks.append(f"WARNING: {len(not_mirrored)} knowledge file(s) outside the vault with no copy in vault.")
+    # Same name, different bytes => the loose file may be a NEWER revision than the archived
+    # one. Silently trusting the name would let a revised deliverable be deleted as a "dupe".
+    diverged = [x for x in loose if x.get("same_name_only")]
+    if diverged:
+        risks.append(f"WARNING: {len(diverged)} file(s) share a vault filename but DIFFER in content "
+                     f"— check which is the newer revision before deleting anything.")
+    safe = [x for x in loose if x.get("vault_twin")]
+    if safe:
+        risks.append(f"OK: {len(safe)} loose file(s) are byte-identical to a vault copy — safe to delete.")
     if icloud:
         risks.append(f"NOTE: {len(icloud)} possible parallel vault(s) in iCloud — confirm single source of truth.")
     if bk is None:
@@ -300,8 +345,13 @@ def main():
     if not loose:
         print("  ok — nothing loose found")
     for x in loose:
-        flag = "" if x["mirrored_in_vault"] else "  <-- NO copy in vault"
-        print(f"  - {x['path']}{flag}")
+        if x.get("vault_twin"):
+            # identical bytes already archived (possibly under a better name) => safe to remove
+            print(f"  - {x['path']}\n      OK: copia identica no vault -> {x['vault_twin']}")
+        elif x.get("same_name_only"):
+            print(f"  - {x['path']}  <-- mesmo NOME no vault, conteudo DIFERENTE (versao nova?)")
+        else:
+            print(f"  - {x['path']}  <-- NO copy in vault")
 
     if icloud:
         print(f"\n## POSSIBLE PARALLEL VAULT (iCloud) ({len(icloud)})")
