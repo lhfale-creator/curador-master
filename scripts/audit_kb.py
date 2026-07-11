@@ -67,30 +67,24 @@ NOT_DRIFT_RE = re.compile(
 )
 
 # SPLIT CANDIDATES. The mirror image of the de-bloat/merge check above: instead of two
-# notes that should become one, this looks for one note that should become several. A
-# note that mixes N unrelated facts is worse than a duplicate — it makes retrieval return
-# the wrong 90% of a file along with the 10% that was needed. Two distinct shapes of bloat:
-#   - GRAB-BAG: headers (or total absence of headers) covering unrelated topics glued
-#     together (e.g. a FAQ mixing product genetics, herbicide compatibility and pasture
-#     management under one file, or 9 different data sources pasted into one note).
+# notes that should become one, this looks for one note that should become several.
+#   - GRAB-BAG: total absence of headers on a large note (e.g. a 76 KB FAQ mixing product
+#     genetics, herbicide compatibility and pasture management as one wall of text).
 #   - GROWING LOG: headers are mostly dated entries stacked over time (a changelog that
 #     never gets archived) — not a topic mix, so the fix is periodic archiving, not a split.
+# Everything else is a generic SIZE WARNING, not a confident GRAB-BAG claim. An earlier cut
+# tried to detect "unrelated headers glued together" via low word-overlap between headers
+# (Jaccard on header tokens) — checked against a real project (Professor Pastagem) where a
+# prior recon had already read every note by hand: notes independently confirmed COHERENT
+# (single topic, just many descriptive subheadings) scored LOWER diversity (0.011-0.089)
+# than the one genuine grab-bag in that same recon (0.018). Portuguese prose subheadings on
+# ONE topic rarely repeat exact words, so low header-overlap doesn't distinguish "many facets
+# of one thing" from "unrelated things glued together" — it flagged most of a project's
+# well-organized long notes as grab-bags. Removed rather than shipped mislabeled; no-headers
+# and dated-headers are both confirmed-reliable signals, so those stay.
 HEADER_RE = re.compile(r"^#{2,3}\s+(.+)$", re.MULTILINE)
 DATE_TOKEN_RE = re.compile(r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?")
 SPLIT_SIZE_KB = 12  # same threshold the size-warning check already used
-
-
-def header_diversity(headers):
-    """Average pairwise Jaccard between header token sets. Low = unrelated headers."""
-    toksets = [tokenize(h) for h in headers]
-    toksets = [t for t in toksets if t]
-    if len(toksets) < 2:
-        return 1.0  # can't tell from one header; assume coherent
-    sims = []
-    for i in range(len(toksets)):
-        for j in range(i + 1, len(toksets)):
-            sims.append(jaccard(toksets[i], toksets[j]))
-    return sum(sims) / len(sims) if sims else 1.0
 
 
 def has_duplicate_frontmatter(text):
@@ -428,12 +422,20 @@ def main():
                 break
     index_path = os.path.join(root, index_name) if index_name and os.path.exists(os.path.join(root, index_name)) else None
 
-    global_scope = (args.project_scope or args.code_scope or "").replace("\\", "/").lower()
+    def norm_scope(s):
+        # Vault paths use spaces/hyphens ("Professor Pastagem", "Produto-MVP"); Claude
+        # memory filenames use underscores ("project_professor_pastagem.md"). Without
+        # collapsing all three to one separator, "--project-scope 'Professor Pastagem'"
+        # never matches its own project's memory notes — caught by re-running this
+        # exact case after the first cut only normalized case/slashes, not separators.
+        return re.sub(r"[\s_-]+", " ", s.replace("\\", "/").strip().lower())
+
+    global_scope = norm_scope(args.project_scope or args.code_scope or "")
 
     def scoped(items, keyfn):
         if not global_scope:
             return items
-        return [it for it in items if global_scope in keyfn(it).replace("\\", "/").lower()]
+        return [it for it in items if global_scope in norm_scope(keyfn(it))]
 
     notes = collect_notes(root)
     idx, full_idx = build_index(notes)
@@ -612,7 +614,7 @@ def main():
         for path, n in notes.items():
             if path == index_path:
                 continue
-            if global_scope and global_scope not in n["rel"].replace("\\", "/").lower():
+            if global_scope and global_scope not in norm_scope(n["rel"]):
                 continue
             if is_historical(n["frontmatter"]):
                 continue  # an archive is supposed to describe the past
@@ -650,12 +652,9 @@ def main():
             split_growinglog.append((n["rel"],
                 f"{kb:.0f} KB, {len(headers)} headers, {date_ratio:.0%} look dated — "
                 "chronological log; consider archiving by period rather than splitting by topic"))
-        elif len(headers) >= 4 and header_diversity(headers) < 0.15:
-            split_grabbag.append((n["rel"],
-                f"{kb:.0f} KB, {len(headers)} headers with little overlap — "
-                "looks like unrelated topics glued together"))
         else:
-            size_warn.append((n["rel"], f"{kb:.0f} KB (large note; consider splitting)"))
+            size_warn.append((n["rel"], f"{kb:.0f} KB, {len(headers)} headers (large note; read before deciding — "
+                                         "may be one coherent topic, evaluate structure not just size)"))
     split_grabbag = scoped(split_grabbag, lambda x: x[0])
     split_growinglog = scoped(split_growinglog, lambda x: x[0])
     size_warn = scoped(size_warn, lambda x: x[0])

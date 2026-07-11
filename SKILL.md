@@ -115,15 +115,22 @@ of text.
 `audit_kb.py` reports notes above the existing 12 KB bloat threshold in one of three
 buckets, radar only — Claude reads the content and decides, exactly like de-bloat merges:
 
-- **SPLIT CANDIDATE - GRAB-BAG**: no headers at all (a large note needs *some* structure
-  to not be a grab-bag by default), or 4+ headers with little word overlap between them
-  (headers talking about unrelated things). Fix: break into one note per fact/topic,
-  cross-linked to a hub, per the "one fact per file" rule.
+- **SPLIT CANDIDATE - GRAB-BAG**: no headers at all — a large note needs *some* structure
+  to not default to grab-bag. Fix: break into one note per fact/topic, cross-linked to a
+  hub, per the "one fact per file" rule.
 - **SPLIT CANDIDATE - GROWING LOG**: 3+ headers, 30%+ of them look dated (`DD/MM`,
   `(DD/MM/AAAA)`). Not a topic mix — a changelog that never gets archived. Fix: archive by
   period (e.g. one note per month) instead of splitting by topic.
-- **SIZE WARNING**: large but neither of the above — one coherent topic that's just long
-  (e.g. a 700-line brand manual). Evaluate anyway, but splitting isn't automatically right.
+- **SIZE WARNING**: large and neither of the above. Read it before deciding — a note with
+  many descriptive subheadings on ONE topic (real example, confirmed by actually reading
+  every flagged note in a project: `Posicionamento ICP e Diagnostico de Mercado.md`, 30
+  headers) is indistinguishable from a genuine multi-topic grab-bag by header word-overlap
+  alone — a first cut tried exactly that (4+ headers, low Jaccard between them) and flagged
+  most of a project's well-organized long notes as grab-bags, because descriptive
+  Portuguese subheadings on one topic rarely repeat exact words either. Removed rather than
+  shipped mislabeled — see the comment above `SPLIT_SIZE_KB` in `audit_kb.py`. This bucket
+  makes no claim about WHY it's long; only "no headers" and "dated headers" are confident
+  enough to name a specific shape.
 
 For **Claude memory** specifically, there's a mechanical (not radar) version of this:
 `project_*` notes over 15 lines and `reference_*` notes over 5 lines are a documented hard
@@ -139,7 +146,10 @@ Three mechanical, path-only checks — real bugs each one caught in this base:
 - **DUPLICATE FOLDER NAME**: the same subfolder name at 2+ depths inside one project (e.g.
   `Professor Pastagem/Produto-MVP/` AND `Professor Pastagem/Conhecimento/Produto-MVP/` —
   same topic, two homes). `Entregáveis`/`Entregaveis` is excluded — it's SUPPOSED to repeat
-  at every depth, that's the convention.
+  at every depth, that's the convention. **Known false-positive pattern** (not yet excluded,
+  judge case-by-case): a project with a "per-entity" folder — e.g. `Entregáveis/Personagens/
+  <Nome>/` — deliberately repeats the SAME sub-structure (`candidatos/`, `cenas/`,
+  `treino-v2/`) under every entity's own folder. That's parallel-by-design, not a duplicate.
 - **ROOT-LEVEL FILE**: a file sitting loose at a project's root when the project otherwise
   organizes into subfolders (excludes the project's own hub note, e.g. `Milagro.md` at the
   root of `Milagro/`). Real example: 3 `.docx`/`.pdf` files loose at `Operations Center/`

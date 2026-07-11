@@ -28,7 +28,7 @@ import sys
 import unicodedata
 
 BINARY_EXT = re.compile(
-    r"\.(pdf|docx?|pptx?|xlsx?|png|jpe?g|gif|svg|webp|bmp|mp4|mov|webm|"
+    r"\.(pdf|docx?|pptx?|xlsx?|docm|pptm|xlsm|png|jpe?g|gif|svg|webp|bmp|mp4|mov|webm|"
     r"mp3|wav|zip|rar|7z|eps|psd)$", re.I)
 
 # Files above this size are still counted and pattern-checked, but not hashed (a 200 MB+

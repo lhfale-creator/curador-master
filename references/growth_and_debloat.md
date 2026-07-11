@@ -60,11 +60,11 @@ De-bloat above asks "should these 2 notes become 1?" This is the opposite questi
 "should this 1 note become several?" `audit_kb.py` reports two distinct shapes, both
 radar only — Claude reads the note and decides, the same way merge candidates work:
 
-- **GRAB-BAG**: no headers at all (a large note needs *some* structure to not default
-  to grab-bag), or 4+ headers with little word overlap between them. Real example:
-  `FAQ Dunamis (interno).md`, 76 KB, zero headers, mixing product genetics, seed specs,
-  herbicide compatibility and pasture management in one wall of text. Fix: one note per
-  fact/topic, cross-linked to a hub — not one note trying to answer everything.
+- **GRAB-BAG**: no headers at all — a large note needs *some* structure to not default to
+  grab-bag. Real example: `FAQ Dunamis (interno).md`, 76 KB, zero headers, mixing product
+  genetics, seed specs, herbicide compatibility and pasture management in one wall of
+  text. Fix: one note per fact/topic, cross-linked to a hub — not one note trying to
+  answer everything.
 - **GROWING LOG**: 3+ headers, 30%+ of them dated (`DD/MM`, `(DD/MM/AAAA)`). This is NOT
   a topic mix — it's a changelog that never gets archived. Fix: archive by period (one
   note per month/quarter), don't split by topic — the topic (e.g. "engineering
@@ -73,6 +73,17 @@ radar only — Claude reads the note and decides, the same way merge candidates 
 Distinguishing these two matters: splitting a growing log by topic produces N notes that
 are each still growing logs; the actual fix is archiving old entries out, not
 topic-decomposition.
+
+**A third shape was tried and removed**: 4+ headers with low word-overlap between them,
+meant to catch "unrelated topics glued together" without an obvious no-headers/dated tell.
+Verified against a real project (Professor Pastagem) where every long note had already been
+read by hand: notes independently confirmed coherent (one topic, just many descriptive
+subheadings — e.g. `Posicionamento ICP e Diagnostico de Mercado.md`, 30 headers) scored
+LOWER diversity than the project's one genuine grab-bag. Portuguese subheadings on a single
+topic rarely repeat exact words, so this signal can't tell "many facets of one thing" from
+"unrelated things glued together" — it flagged most of that project's well-organized long
+notes as grab-bags. A confidently-labeled false claim is worse than an honest "long, read it
+yourself" — those notes now fall into the generic size-warning bucket instead.
 
 **Claude memory has a mechanical (non-radar) version**: `project_*` notes over 15 lines
 and `reference_*` notes over 5 lines are a documented hard limit
