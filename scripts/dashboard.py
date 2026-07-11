@@ -12,8 +12,10 @@ import json
 import os
 import sys
 
-METRICS = ["notes", "orphans", "broken", "separator", "weak", "dupes", "density", "critical"]
-UP_IS_BAD  = {"orphans", "broken", "separator", "weak", "critical"}
+METRICS = ["notes", "orphans", "broken", "separator", "weak", "dupes", "stale",
+           "split_candidates", "misplaced", "size_rule_violations", "density", "critical"]
+UP_IS_BAD  = {"orphans", "broken", "separator", "weak", "critical",
+              "stale", "split_candidates", "misplaced", "size_rule_violations"}
 UP_IS_GOOD = {"notes", "density"}
 
 

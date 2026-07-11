@@ -26,9 +26,12 @@ The 55 missing-frontmatter notes were fixed in one `--normalize-frontmatter` pas
 
 | Dimension | Details |
 |---|---|
-| **Hygiene** | Orphans, broken links, kebab-vs-underscore mismatch, `name` ≠ filename, frontmatter, index duplicates |
+| **Hygiene** | Orphans, broken links, kebab-vs-underscore mismatch, `name` ≠ filename, frontmatter (incl. duplicate `---` blocks), index duplicates |
 | **Graph health** | Link density, weakly-connected notes, cross-system references |
-| **De-bloat** | Jaccard ≥ 0.6 similarity flags merge candidates; `merge_helper.py` produces the draft |
+| **De-bloat (merge)** | Jaccard ≥ 0.6 similarity flags merge candidates; `merge_helper.py` produces the draft |
+| **Split (desmembramento)** | The mirror of de-bloat: grab-bag notes, growing logs, and (memory) hard line-limit violations |
+| **Desorganization** | Duplicate folder names, root-level orphan files, cross-project file contamination (vault) |
+| **Storage optimization** | `storage_audit.py`: exact/near-duplicate binaries, malformed filenames, Entregaveis convention, uncatalogued assets |
 | **Growth tracking** | `--snapshot` appends one JSON line per run; `dashboard.py` shows the trend |
 | **Cloud durability** | OneDrive + Dropbox + Google Drive detection; loose-file scan; sync-process check |
 
@@ -36,7 +39,8 @@ The 55 missing-frontmatter notes were fixed in one `--normalize-frontmatter` pas
 
 | Script | Purpose |
 |---|---|
-| `audit_kb.py` | Full audit. `--summary` for quick daily check. `--json` for machine output. |
+| `audit_kb.py` | Full audit. `--summary` for quick daily check. `--json` for machine output. `--project-scope` filters to one project. |
+| `storage_audit.py` | Binary/storage audit (not just `.md`): duplicates, malformed names, convention, uncatalogued assets. `--project` scopes the walk. |
 | `apply_safe_fixes.py` | Mechanical fixes. `--interactive` prompts per file. Dry-run by default. |
 | `check_cloud_health.py` | Cloud durability. Covers OneDrive, Dropbox, Google Drive. |
 | `dashboard.py` | Trend view from `growth_log.jsonl`. Shows regressions. |
@@ -74,9 +78,15 @@ python scripts/check_cloud_health.py --vault "<vault>"
 python scripts/audit_kb.py --path "<memory>" --summary
 python scripts/audit_kb.py --path "<vault>"  --summary
 
+# End of a work session on ONE project — same idea as run.ps1 -Project/run.sh --project
+python scripts/audit_kb.py --path "<memory>" --project-scope "Nome do Projeto"
+python scripts/audit_kb.py --path "<vault>"  --project-scope "Nome do Projeto"
+python scripts/storage_audit.py --vault "<vault>" --project "Nome do Projeto"
+
 # Weekly — full audit + snapshot + cloud
 python scripts/audit_kb.py --path "<memory>" --snapshot "<vault>/growth_log.jsonl"
 python scripts/audit_kb.py --path "<vault>"  --snapshot "<vault>/growth_log.jsonl"
+python scripts/storage_audit.py --vault "<vault>" --snapshot "<vault>/growth_log.jsonl"
 python scripts/check_cloud_health.py --vault "<vault>"
 python scripts/dashboard.py --log "<vault>/growth_log.jsonl"
 
@@ -91,6 +101,11 @@ python scripts/apply_safe_fixes.py --path "<folder>" --normalize-names --interac
 python scripts/audit_kb.py --path "<folder>" --json > audit.json
 python scripts/merge_helper.py --from-audit audit.json --root "<folder>" --output merged.md
 ```
+
+Split candidates, desorganization, and storage findings are all radar, never auto-fixed —
+Claude reads the flagged note/file and decides (split/merge/move/dedupe), the same
+judgement-call model the merge workflow above already uses. See `SKILL.md` → *Split
+candidates*, *Desorganization radar*, *Storage optimization*, and *Project wrap-up*.
 
 ## The golden rule
 
@@ -112,13 +127,15 @@ Obsidian resolves `[[X]]` by the file `X.md` (or `aliases:`), never by the `name
 - *"check cloud"* / *"is everything in the vault?"*
 - *"show growth trend"* / *"dashboard"*
 - *"help me merge these two notes"* / *"de-bloat"*
-- *"wrap up the day"*
+- *"split this note"* / *"desmembrar essa nota"* / *"optimize storage"*
+- *"wrap up the day"* / *"curador e sync no projeto X"* (end of a per-project session)
 
 ## Cadence
 
 | When | What |
 |---|---|
 | **End of day** | `--summary` on both folders |
+| **End of a work session on one project** | sync mirror → scoped audit + storage audit → judgement fixes → re-audit (`SKILL.md` → *Project wrap-up*) |
 | **Weekly** | Full audit + snapshot + cloud check + dashboard |
 | **Before migrating machines** | Full cleanup + cloud check + backup |
 

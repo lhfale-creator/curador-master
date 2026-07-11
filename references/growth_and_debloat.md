@@ -54,6 +54,34 @@ Very large notes (the report flags > 12 KB) tend to become landfills. Evaluate:
 A long index (`MEMORY.md` > ~120 lines) signals it's time to group pointers by topic
 or archive dead memories.
 
+## When to split a note (desmembramento — the mirror of merge)
+
+De-bloat above asks "should these 2 notes become 1?" This is the opposite question:
+"should this 1 note become several?" `audit_kb.py` reports two distinct shapes, both
+radar only — Claude reads the note and decides, the same way merge candidates work:
+
+- **GRAB-BAG**: no headers at all (a large note needs *some* structure to not default
+  to grab-bag), or 4+ headers with little word overlap between them. Real example:
+  `FAQ Dunamis (interno).md`, 76 KB, zero headers, mixing product genetics, seed specs,
+  herbicide compatibility and pasture management in one wall of text. Fix: one note per
+  fact/topic, cross-linked to a hub — not one note trying to answer everything.
+- **GROWING LOG**: 3+ headers, 30%+ of them dated (`DD/MM`, `(DD/MM/AAAA)`). This is NOT
+  a topic mix — it's a changelog that never gets archived. Fix: archive by period (one
+  note per month/quarter), don't split by topic — the topic (e.g. "engineering
+  changelog") is genuinely one thing, it just needs its tail cut off periodically.
+
+Distinguishing these two matters: splitting a growing log by topic produces N notes that
+are each still growing logs; the actual fix is archiving old entries out, not
+topic-decomposition.
+
+**Claude memory has a mechanical (non-radar) version**: `project_*` notes over 15 lines
+and `reference_*` notes over 5 lines are a documented hard limit
+([[feedback_memoria_notas_enxutas]]), not a heuristic — `SIZE RULE VIOLATION` in the
+report. Fix: move the excess into a dated vault note, leave only the pointer in memory.
+This is exactly the failure the rule was written to prevent (a project note grew to 89 KB
+of session logs before anyone noticed) — and on this base, checking it mechanically for
+the first time found 90 of 136 memory notes already over the limit.
+
 ## Archive policy (don't delete carelessly)
 
 - `reminder_*` whose deadline passed or whose action is done: resolve and remove, or
