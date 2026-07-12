@@ -159,12 +159,27 @@ def find_exact_duplicates(binaries):
 
 
 def find_near_duplicates(binaries):
+    """Same folder, same name modulo a copy/version marker — AND the unsuffixed base
+    file must itself be in the group. Without that anchor, a numbered SEQUENCE
+    (bg-02.png..bg-07.png, final-01..final-08 — carousel slides) collapses onto one
+    key and gets reported as near-duplicates; a run of numbered files with no plain
+    'bg.png' beside them is a series, not copies. 'X.pdf' + 'X-1.pdf' or 'X (1).pdf'
+    (base present) is the real re-download/re-export signal — every true positive so
+    far (Rehagro, laudo) had the base file sitting right there."""
     groups = {}
     for b in binaries:
         stem, ext = os.path.splitext(b["name"])
         key = (b["dir"], normalize_stem(stem), ext.lower())
-        groups.setdefault(key, []).append(b["rel"])
-    return [(k[1] + k[2], paths) for k, paths in groups.items() if len(paths) >= 2]
+        groups.setdefault(key, []).append((b["name"], b["rel"]))
+    out = []
+    for (d, nstem, ext), members in groups.items():
+        if len(members) < 2:
+            continue
+        if not any(normalize_stem(os.path.splitext(name)[0]) == os.path.splitext(name)[0].strip().lower()
+                   for name, _ in members):
+            continue  # no unsuffixed base — a numbered series, not copies
+        out.append((nstem + ext, [rel for _, rel in members]))
+    return out
 
 
 def find_malformed(binaries):

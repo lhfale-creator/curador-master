@@ -126,7 +126,9 @@ def scan_projects(root):
         return projects
     for entry in entries:
         full = os.path.join(root, entry)
-        if not os.path.isdir(full) or entry.lower() in NON_PROJECT_DIRS:
+        # "_"-prefixed top folders (_Arquivo) are archives/meta, not projects — the
+        # root-level-file and duplicate-folder expectations don't apply to an archive.
+        if not os.path.isdir(full) or entry.lower() in NON_PROJECT_DIRS or entry.startswith("_"):
             continue
         files, dirs = [], []
         for dirpath, dirnames, filenames in os.walk(full):
@@ -718,6 +720,12 @@ def main():
         if path == index_path:
             continue
         if profile == "vault" and in_mirror(n["rel"]):
+            continue
+        # An ARCHIVE is supposed to be a big dated log — that's its job, same reason
+        # is_historical() already exempts staleness and code drift. Without this, the
+        # very archive note the growing-log fix tells you to create gets flagged as a
+        # growing log the next day (happened to Blueprint do Motor - Changelog).
+        if is_historical(n["frontmatter"]):
             continue
         try:
             kb = os.path.getsize(path) / 1024
