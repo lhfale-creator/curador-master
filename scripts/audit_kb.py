@@ -22,6 +22,14 @@ import os
 import re
 import sys
 
+# Windows consoles/redirects often default to cp1252 (or another legacy codepage), which
+# crashes on NFD-decomposed accents (e.g. a lone combining acute from a Mac-authored
+# filename) even though every file is read/written as UTF-8. Force UTF-8 out so a vault
+# note or filename with any Unicode content never takes the whole audit down.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 WIKILINK_RE = re.compile(r"\[\[([^\]\|#\^]+)(?:[#\^][^\]\|]*)?(?:\|[^\]]+)?\]\]")
 MDLINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+?\.md)(?:#[^)]*)?\)")
 H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)

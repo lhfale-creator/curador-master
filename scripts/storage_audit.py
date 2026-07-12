@@ -27,6 +27,14 @@ import re
 import sys
 import unicodedata
 
+# Windows consoles/redirects often default to cp1252 (or another legacy codepage), which
+# crashes on NFD-decomposed accents (e.g. a lone combining acute from a Mac-authored
+# filename) even though every file is read/written as UTF-8. Force UTF-8 out so a vault
+# note or filename with any Unicode content never takes the whole audit down.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 BINARY_EXT = re.compile(
     r"\.(pdf|docx?|pptx?|xlsx?|docm|pptm|xlsm|png|jpe?g|gif|svg|webp|bmp|mp4|mov|webm|"
     r"mp3|wav|zip|rar|7z|eps|psd)$", re.I)
