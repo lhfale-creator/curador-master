@@ -165,7 +165,12 @@ Three mechanical, path-only checks — real bugs each one caught in this base:
   root while everything else lives under `Conhecimento/<subfolder>/`.
 - **CROSS-PROJECT FILE**: a filename/path mentioning a DIFFERENT top-level project's name.
   Real example: `kb_milagro_403_conversas.json` sitting inside the `Professor Pastagem`
-  project folder.
+  project folder. Two noise guards: project-name CONTAINMENT is skipped (everything in
+  "Marca Pessoal Nathalya" trivially mentions the project "Marca Pessoal"), and a match
+  on a DIRECTORY segment is reported once as `folder\*` — a subfolder named after another
+  project is one decision, not one finding per file inside it. Note: a hit here is often
+  deliberate provenance (Milagro-sourced data feeding another project), so it's radar for
+  a naming decision, not automatically a file to move.
 
 All three are radar — Claude decides whether and where to move the file, never the script.
 

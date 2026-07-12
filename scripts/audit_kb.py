@@ -176,16 +176,38 @@ def find_misplacement(projects):
                     continue
                 root_orphan.append((pname, f))
 
+        norm_pname = re.sub(r"[\s_&-]+", " ", pname).strip().lower()
         for other in names:
             if other == pname:
                 continue
             norm_other = re.sub(r"[\s_&-]+", " ", other).strip().lower()
             if len(norm_other) < 5:
                 continue
+            # Project-name containment is not contamination: every file inside
+            # "Marca Pessoal Nathalya" trivially mentions the project "Marca Pessoal".
+            if norm_other in norm_pname or norm_pname in norm_other:
+                continue
             pat = re.compile(r"\b" + re.escape(norm_other) + r"\b", re.I)
+            seen_dirs = set()
             for f in info["files"]:
                 norm_f = re.sub(r"[\s_&.-]+", " ", f).lower()
-                if pat.search(norm_f):
+                if not pat.search(norm_f):
+                    continue
+                # When the match comes from a DIRECTORY segment, report that folder
+                # once — not one finding per file inside it. A subfolder named after
+                # another project (e.g. Nathalya's "Content Hub/", where that project
+                # was born) is ONE decision to make, not sixteen.
+                parts = re.split(r"[\\/]", f)
+                dir_hit = None
+                for i, seg in enumerate(parts[:-1]):
+                    if pat.search(re.sub(r"[\s_&.-]+", " ", seg).lower()):
+                        dir_hit = "\\".join(parts[:i + 1])
+                        break
+                if dir_hit:
+                    if dir_hit not in seen_dirs:
+                        seen_dirs.add(dir_hit)
+                        cross_project.append((pname, dir_hit + "\\*", other))
+                else:
                     cross_project.append((pname, f, other))
     return dup_folder, root_orphan, cross_project
 
@@ -303,7 +325,17 @@ def parse_frontmatter(text):
         if not line.strip() or line.strip().startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
-        m = re.match(r"^([\w.-]+)\s*:\s*(.*)$", line.strip())
+        stripped = line.strip()
+        # YAML dash-list item under the current top-level key. Without this, a note
+        # using the block form (tags:\n  - projeto\n  - agro) reads as tags == None
+        # and gets flagged "missing tags" — a real false positive this base hit
+        # (AGROHAP.md, tags present in dash-list form, reported missing for weeks).
+        dm = re.match(r"^-\s+(.+)$", stripped)
+        if dm and parent:
+            item = dm.group(1).strip().strip('"').strip("'")
+            fields[parent] = f"{fields[parent]}, {item}" if fields.get(parent) else item
+            continue
+        m = re.match(r"^([\w.-]+)\s*:\s*(.*)$", stripped)
         if not m:
             continue
         key, val = m.group(1), m.group(2).strip().strip('"').strip("'")
