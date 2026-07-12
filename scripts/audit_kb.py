@@ -142,7 +142,13 @@ def scan_projects(root):
 
 def find_misplacement(projects):
     """Three mechanical desorganization signals, radar only (Claude decides the move):
-    1. same subfolder name at 2+ depths inside one project (a topic living in two homes).
+    1. same subfolder name at DIFFERENT depths inside one project (a topic living in
+       two homes). Same-depth repeats are NOT flagged: checked against every duplicate
+       group this vault actually had, all 7 same-depth groups were parallel BY DESIGN —
+       the Conhecimento/X + Entregaveis/X topic mirror (the documented convention) and
+       per-entity folders repeating the same substructure (Personagens/<Nome>/cenas).
+       The one real bug (Produto-MVP at project root AND under Conhecimento/) was the
+       only group whose occurrences sat at different depths.
     2. loose files at a project root when the project otherwise organizes into subfolders
        (excludes the project's own hub note, e.g. 'Milagro.md' at the root of Milagro/).
     3. a file whose path mentions ANOTHER top-level project's name (cross-contamination)."""
@@ -156,7 +162,8 @@ def find_misplacement(projects):
                 continue
             by_base.setdefault(base, []).append(d)
         for base, paths in by_base.items():
-            if len(paths) >= 2:
+            depths = {p.replace("\\", "/").count("/") for p in paths}
+            if len(paths) >= 2 and len(depths) >= 2:
                 dup_folder.append((pname, base, paths))
 
         if info["dirs"]:
@@ -309,6 +316,39 @@ def parse_frontmatter(text):
     return fields, True
 
 
+def extract_aliases(text):
+    """Frontmatter `aliases:` values — inline list ([a, b]) or YAML dash-list.
+
+    Obsidian OFFICIALLY resolves [[wikilinks]] by filename OR by an `aliases:` entry
+    (help.obsidian.md > Properties, Aliases) — it is the documented safety net when a
+    note is renamed (`conventions.md` prescribes exactly that). parse_frontmatter()
+    above only captures `key: value` scalars, so alias lists were invisible to the
+    audit and every legitimate alias link was reported as BROKEN."""
+    if not text.startswith("---"):
+        return []
+    end = text.find("\n---", 3)
+    if end == -1:
+        return []
+    aliases = []
+    in_alias_block = False
+    for line in text[3:end].splitlines():
+        stripped = line.strip()
+        m = re.match(r"^alias(?:es)?\s*:\s*(.*)$", stripped)
+        if m:
+            val = m.group(1).strip()
+            if val.startswith("[") and val.endswith("]"):
+                aliases += [a.strip().strip('"').strip("'") for a in val[1:-1].split(",")]
+            in_alias_block = (val == "")
+            continue
+        if in_alias_block:
+            dm = re.match(r"^-\s+(.+)$", stripped)
+            if dm:
+                aliases.append(dm.group(1).strip().strip('"').strip("'"))
+            elif stripped and not stripped.startswith("-"):
+                in_alias_block = False
+    return [a for a in aliases if a]
+
+
 def collect_notes(root):
     notes = {}
     for dirpath, dirnames, filenames in os.walk(root):
@@ -347,14 +387,19 @@ def collect_notes(root):
                 "headers": HEADER_RE.findall(prose),
                 "body_line_count": len([l for l in prose.strip().splitlines() if l.strip()]),
                 "dup_frontmatter": has_duplicate_frontmatter(text),
+                "aliases": extract_aliases(text),
             }
     return notes
 
 
 def build_index(notes):
+    # stem first, then name:, then aliases — a file's own stem always wins a
+    # collision with another file's alias (setdefault keeps the first claim).
     idx = {}
     for path, n in notes.items():
-        for ident in filter(None, [n["stem"], n["name"]]):
+        idx.setdefault(norm(n["stem"]), path)
+    for path, n in notes.items():
+        for ident in filter(None, [n["name"], *n["aliases"]]):
             idx.setdefault(norm(ident), path)
     full = {}
     for path, n in notes.items():
@@ -451,7 +496,11 @@ def main():
             if dest is not None:
                 if dest != path:
                     incoming[dest].add(path)
-                    if base != notes[dest]["stem"]:
+                    # A link that resolves via an alias is CORRECT Obsidian behavior
+                    # (the documented rename safety net), not a separator mismatch —
+                    # flagging it would make the fixer rewrite a deliberate alias.
+                    is_alias = norm(base) in {norm(a) for a in notes[dest]["aliases"]}
+                    if base != notes[dest]["stem"] and not is_alias:
                         near.append((n["rel"], base, notes[dest]["rel"]))
             elif ASSET_RE.search(base):
                 asset_refs.append((n["rel"], t))

@@ -55,6 +55,13 @@ Full conventions in `references/conventions.md`. **Golden rule: underscore is ca
 in everything (filename == `name:` field == wikilink == index entry).** Only then do
 Claude and Obsidian agree and the graph connects.
 
+The audit resolves links exactly the way Obsidian officially does: by filename OR by a
+frontmatter `aliases:` entry (both YAML forms, `[a, b]` and dash-list). A link that
+resolves via alias is counted as connected and is NOT a separator mismatch — the alias
+is the documented rename safety net (`conventions.md` prescribes it), so "fixing" it
+would undo a deliberate decision. Note: Obsidian resolves by `aliases:`, never by the
+`name:` field — `name:` is a Claude-memory convention that Obsidian ignores.
+
 ## Staleness and code drift (the dangerous findings)
 
 A stale note is worse than a duplicate: a duplicate wastes space, a stale note **actively
@@ -73,7 +80,7 @@ longer exists**. Date-staleness is only a proxy (a note 3 weeks old can already 
 code drift is proof.
 
 ```
-python scripts/audit_kb.py --path "<vault>" \
+python "${CLAUDE_SKILL_DIR}/scripts/audit_kb.py" --path "<vault>" \
     --code-root "<repo>" --code-scope "Professor Pastagem"
 ```
 
@@ -143,13 +150,15 @@ the limit; folding that volume into the "must be 0" bar would drown the graph-hy
 
 Three mechanical, path-only checks — real bugs each one caught in this base:
 
-- **DUPLICATE FOLDER NAME**: the same subfolder name at 2+ depths inside one project (e.g.
-  `Professor Pastagem/Produto-MVP/` AND `Professor Pastagem/Conhecimento/Produto-MVP/` —
-  same topic, two homes). `Entregáveis`/`Entregaveis` is excluded — it's SUPPOSED to repeat
-  at every depth, that's the convention. **Known false-positive pattern** (not yet excluded,
-  judge case-by-case): a project with a "per-entity" folder — e.g. `Entregáveis/Personagens/
-  <Nome>/` — deliberately repeats the SAME sub-structure (`candidatos/`, `cenas/`,
-  `treino-v2/`) under every entity's own folder. That's parallel-by-design, not a duplicate.
+- **DUPLICATE FOLDER NAME**: the same subfolder name at DIFFERENT depths inside one
+  project (e.g. `Professor Pastagem/Produto-MVP/` AND `Professor Pastagem/Conhecimento/
+  Produto-MVP/` — same topic, two homes). `Entregáveis`/`Entregaveis` is excluded — it's
+  SUPPOSED to repeat at every depth. Same-depth repeats are NOT flagged: checked against
+  every duplicate group this vault actually had, all 7 same-depth groups were parallel BY
+  DESIGN — the `Conhecimento/X` + `Entregáveis/X` topic mirror, and per-entity folders
+  repeating the same substructure (`Personagens/<Nome>/cenas/`). The one real bug was the
+  only different-depth group. If a same-depth duplicate ever IS real, it still surfaces
+  through its content (orphans, split candidates); the path check stays quiet on purpose.
 - **ROOT-LEVEL FILE**: a file sitting loose at a project's root when the project otherwise
   organizes into subfolders (excludes the project's own hub note, e.g. `Milagro.md` at the
   root of `Milagro/`). Real example: 3 `.docx`/`.pdf` files loose at `Operations Center/`
@@ -169,7 +178,7 @@ history, OneDrive is the only safety net, so any destructive call is Claude's, w
 user present.
 
 ```
-python scripts/storage_audit.py --vault "<vault>" [--project "Nome"] [--min-size-mb N]
+python "${CLAUDE_SKILL_DIR}/scripts/storage_audit.py" --vault "<vault>" [--project "Nome"] [--min-size-mb N]
 ```
 
 - **EXACT DUPLICATE** — sha256 match, byte-for-byte identical (files > 100 MB aren't hashed;
@@ -207,7 +216,7 @@ python scripts/storage_audit.py --vault "<vault>" [--project "Nome"] [--min-size
 ### 1. Audit (always first, never fix blind)
 
 ```
-python scripts/audit_kb.py --path "<folder>" [--index MEMORY.md] [--json]
+python "${CLAUDE_SKILL_DIR}/scripts/audit_kb.py" --path "<folder>" [--index MEMORY.md] [--json]
 ```
 - Claude memory and vault are audited separately.
 - Profile and index are auto-detected (`.obsidian` dir → vault; `MEMORY.md` → memory).
@@ -238,7 +247,7 @@ Detailed breakdown by type in `references/fixes.md`. Summary:
 ### 3. Apply safe fixes (dry-run first, ALWAYS)
 
 ```
-python scripts/apply_safe_fixes.py --path "<folder>" [--index MEMORY.md] \
+python "${CLAUDE_SKILL_DIR}/scripts/apply_safe_fixes.py" --path "<folder>" [--index MEMORY.md] \
     [--repoint old_slug=new_slug] [--normalize-names] [--no-separator] [--no-dedup]
 ```
 - No `--write` = dry-run: prints everything it would do and writes nothing. **Review first.**
@@ -262,7 +271,7 @@ Run `audit_kb.py` again and confirm critical findings are zero (or that remainin
 ones are conscious deferred decisions). Record what is pending.
 Use `--snapshot` pointing to a log inside the vault to record the day's metric:
 ```
-python scripts/audit_kb.py --path "<folder>" \
+python "${CLAUDE_SKILL_DIR}/scripts/audit_kb.py" --path "<folder>" \
     --snapshot "<your-vault>/growth_log.jsonl"
 ```
 If `orphans`/`broken` increased since the last snapshot, the teachable pattern
@@ -271,7 +280,7 @@ was not followed during note creation — fix and reinforce the rule.
 ### 6. Verify cloud durability
 
 ```
-python scripts/check_cloud_health.py --vault "<vault>" [--extra-dir "<scratch-dir>"]
+python "${CLAUDE_SKILL_DIR}/scripts/check_cloud_health.py" --vault "<vault>" [--extra-dir "<scratch-dir>"]
 ```
 Confirms vault is under the synced OneDrive root, OneDrive is running, and lists
 knowledge files stranded outside the vault (rule: nothing outside). Details in
@@ -285,13 +294,13 @@ scoped to that one project with `--project-scope`/`--code-scope` (same flag, fil
 stale/split/size-rule/misplacement findings down to paths containing the project name;
 `--project` on `storage_audit.py` scopes the walk itself to `<vault>/<project>`):
 
-1. **Mirror**: `python ../sync-cerebro/scripts/sync_memory_mirror.py --memory "<memory>" --vault "<vault>" --write`
+1. **Mirror**: `python "${CLAUDE_SKILL_DIR}/../sync-cerebro/scripts/sync_memory_mirror.py" --memory "<memory>" --vault "<vault>" --write`
    (global, idempotent — memory→vault stays current before auditing).
 2. **Scoped audit**:
    ```
-   python scripts/audit_kb.py --path "<memory>" --project-scope "<Projeto>"
-   python scripts/audit_kb.py --path "<vault>"  --project-scope "<Projeto>"
-   python scripts/storage_audit.py --vault "<vault>" --project "<Projeto>"
+   python "${CLAUDE_SKILL_DIR}/scripts/audit_kb.py" --path "<memory>" --project-scope "<Projeto>"
+   python "${CLAUDE_SKILL_DIR}/scripts/audit_kb.py" --path "<vault>"  --project-scope "<Projeto>"
+   python "${CLAUDE_SKILL_DIR}/scripts/storage_audit.py" --vault "<vault>" --project "<Projeto>"
    ```
 3. **Read, don't just parse the report.** For every split/misplacement/storage finding,
    open the actual note/file — the report is a radar, not a verdict. Decide: split, merge,
