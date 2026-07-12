@@ -83,7 +83,11 @@ NOT_DRIFT_RE = re.compile(
 # well-organized long notes as grab-bags. Removed rather than shipped mislabeled; no-headers
 # and dated-headers are both confirmed-reliable signals, so those stay.
 HEADER_RE = re.compile(r"^#{2,3}\s+(.+)$", re.MULTILINE)
-DATE_TOKEN_RE = re.compile(r"\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?")
+# (?<!\d) / (?!\d) so a 3+ digit run isn't torn into a fake match: "47/180" (a freq
+# ratio) would otherwise match "47/18" (the \d{1,2} caps just stop early inside "180").
+# Real bug this caused: "freq: 47/180 = 26%" section headers in a reference note got
+# read as 26% dated, flipping it into a false GROWING LOG.
+DATE_TOKEN_RE = re.compile(r"(?<!\d)\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?(?!\d)")
 SPLIT_SIZE_KB = 12  # same threshold the size-warning check already used
 
 
